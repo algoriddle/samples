@@ -1,4 +1,5 @@
+rm -Rf target
 mkdir -p target
 javac -d target src/algoriddle/Hello.java
 cd target
-jar -cvfe hello.jar algoriddle.Hello algoriddle/Hello.class
+jar -cfe hello.jar algoriddle.Hello algoriddle/Hello.class
