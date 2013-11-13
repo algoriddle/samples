@@ -5,17 +5,34 @@ import com.amazonaws.services.s3.model.*;
 import java.io.*;
 import java.net.URISyntaxException;
 import java.nio.file.*;
-import java.nio.file.attribute.*;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.security.*;
+import java.util.List;
 import java.util.Properties;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import javax.persistence.*;
 import javax.xml.bind.DatatypeConverter;
 
 public class App {
 
     public static void main(String[] args) throws IOException, URISyntaxException {
-        File pf = new File("s3.properties");
+        EntityManagerFactory factory = Persistence.createEntityManagerFactory("algoriddle_s3");
+        EntityManager em = factory.createEntityManager();
+        Query q = em.createQuery("select t from FileDescriptor t");
+        List<FileDescriptor> todoList = q.getResultList();
+        for (FileDescriptor todo : todoList) {
+            System.out.println(todo);
+        }
+        // create new todo
+    em.getTransaction().begin();
+    FileDescriptor todo = new FileDescriptor();
+    todo.setSummary("This is a test");
+    todo.setDescription("This is a test");
+    em.persist(todo);
+    em.getTransaction().commit();
+    em.close();
+/*        File pf = new File("s3.properties");
         Properties props = new Properties();
         try (InputStream is = new FileInputStream(pf)) {
             props.load(is);
@@ -24,7 +41,7 @@ public class App {
         switch (args[0]) {
             case "gendb": generateLocalFileList(props.getProperty("base"), props.getProperty("scope"), props.getProperty("db"));
                 break;
-        }
+        }*/
 //        ;
         /*        AmazonS3 s3 = new AmazonS3Client();
          ListObjectsRequest listObjectsRequest = new ListObjectsRequest().withBucketName(args[0]);
