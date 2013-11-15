@@ -28,7 +28,7 @@
         <dependency>
             <groupId>org.apache.derby</groupId>
             <artifactId>derby</artifactId>
-            <version>10.10.1.1</version>
+            <version>10.8.3.0</version>
         </dependency>
         <!--dependency>
             <groupId>org.eclipse.persistence</groupId>
@@ -67,16 +67,17 @@
                 <configuration>
                     <source>1.7</source>
                     <target>1.7</target>
+                    <compilerArgument>-Xlint:unchecked</compilerArgument>
                 </configuration>
             </plugin>
         </plugins>
     </build>
-    <repositories>
+    <!--repositories>
         <repository>
             <url>http://download.eclipse.org/rt/eclipselink/maven.repo/</url>
             <id>eclipselink</id>
             <layout>default</layout>
             <name>Repository for library EclipseLink (JPA 2.1)</name>
         </repository>
-    </repositories>
+    </repositories-->
 </project>

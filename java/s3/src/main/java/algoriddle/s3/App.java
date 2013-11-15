@@ -7,6 +7,7 @@ import java.net.URISyntaxException;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.security.*;
+import java.sql.*;
 import java.util.List;
 import java.util.Properties;
 import java.util.logging.Level;
@@ -15,67 +16,84 @@ import javax.persistence.*;
 import javax.xml.bind.DatatypeConverter;
 
 public class App {
-
-    public static void main(String[] args) throws IOException, URISyntaxException {
-        EntityManagerFactory factory = Persistence.createEntityManagerFactory("algoriddle_s3");
-        EntityManager em = factory.createEntityManager();
-        Query q = em.createQuery("select t from FileDescriptor t");
-        List<FileDescriptor> todoList = q.getResultList();
-        for (FileDescriptor todo : todoList) {
-            System.out.println(todo);
-        }
-        // create new todo
-    em.getTransaction().begin();
-    FileDescriptor todo = new FileDescriptor();
-    todo.setSummary("This is a test");
-    todo.setDescription("This is a test");
-    em.persist(todo);
-    em.getTransaction().commit();
-    em.close();
-/*        File pf = new File("s3.properties");
+    
+    private static EntityManagerFactory factory = Persistence.createEntityManagerFactory("algoriddle_s3");
+    private static Logger logger = Logger.getLogger(App.class.getName());
+        
+    public static void main(String[] args) throws IOException, URISyntaxException, SQLException {
+        File pf = new File("s3.properties");
         Properties props = new Properties();
         try (InputStream is = new FileInputStream(pf)) {
             props.load(is);
         }
         props.list(System.out);
+        String base = props.getProperty("base"),
+                scope = props.getProperty("scope");
         switch (args[0]) {
-            case "gendb": generateLocalFileList(props.getProperty("base"), props.getProperty("scope"), props.getProperty("db"));
+            case "gendb": 
+                cleanLocalFileList(base);
+                generateLocalFileList(base, scope);
                 break;
-        }*/
+        }
 //        ;
         /*        AmazonS3 s3 = new AmazonS3Client();
          ListObjectsRequest listObjectsRequest = new ListObjectsRequest().withBucketName(args[0]);
          ObjectListing objectListing;
          do {
          objectListing = s3.listObjects(listObjectsRequest);
-         for (S3ObjectSummary summary : objectListing.getObjectSummaries()) {
-         System.out.printf("%-30s %10d %s\n", summary.getKey(), summary.getSize(), summary.getStorageClass());
+         for (S3ObjectSummary sha1 : objectListing.getObjectSummaries()) {
+         System.out.printf("%-30s %10d %s\n", sha1.getKey(), sha1.getSize(), sha1.getStorageClass());
          }
          listObjectsRequest.setMarker(objectListing.getNextMarker());
          } while (objectListing.isTruncated());*/
+        System.exit(0);
     }
 
-    static void generateLocalFileList(String basePath, String scopePath, String outputFile) throws IOException {
+    private static void generateLocalFileList(String basePath, String scopePath) throws IOException {
+        logger.info("generateLocalFileList");
         final Path base = Paths.get(basePath).toAbsolutePath().normalize();
-        try (FileOutputStream fs = new FileOutputStream(outputFile);
-                PrintStream out = new PrintStream(fs);) {
-            Files.walkFileTree(Paths.get(scopePath).toAbsolutePath().normalize(), new SimpleFileVisitor<Path>() {
-                @Override
-                public FileVisitResult visitFile(Path file, BasicFileAttributes attrs)
-                        throws IOException {
-                    try {
-                        out.println(calculateHash(file.toFile()) + "," + base.relativize(file));
-                    } catch (NoSuchAlgorithmException ex) {
-                        Logger.getLogger(App.class.getName()).log(Level.SEVERE, null, ex);
+        final EntityManager em = factory.createEntityManager();
+        final Query query = em.createQuery("SELECT f FROM FileDescriptor f WHERE f.name = :name");
+        Files.walkFileTree(Paths.get(scopePath).toAbsolutePath().normalize(), new SimpleFileVisitor<Path>() {
+            @Override
+            public FileVisitResult visitFile(Path path, BasicFileAttributes attrs)
+                    throws IOException {
+                try {
+                    File file = path.toFile();
+                    String name = base.relativize(path).toString();
+                    long modified = file.lastModified();
+
+                    em.getTransaction().begin();
+                    query.setParameter("name", name);
+                    List<FileDescriptor> files = query.getResultList();
+                    FileDescriptor fd;
+                    if (files.isEmpty()) {
+                        fd = new FileDescriptor();
+                        logger.log(Level.INFO, "CREATE: {0}", name);
+                    } else {
+                        fd = files.get(0);
+                        if (fd.modified == modified) {
+                            em.getTransaction().rollback();
+                            return FileVisitResult.CONTINUE;
+                        } else {
+                            logger.log(Level.INFO, "UPDATE: {0}", name);
+                        }
                     }
-                    return FileVisitResult.CONTINUE;
+                    fd.name = name;
+                    fd.sha1 = calculateHash(file);
+                    fd.modified = modified;
+                    em.persist(fd);
+                    em.getTransaction().commit();
+                } catch (NoSuchAlgorithmException ex) {
+                    logger.log(Level.SEVERE, null, ex);
                 }
+                return FileVisitResult.CONTINUE;
             }
-            );
-        }
+        });
+        em.close();
     }
     
-    static String calculateHash(File file) throws NoSuchAlgorithmException, IOException {
+    private static String calculateHash(File file) throws NoSuchAlgorithmException, IOException {
         MessageDigest algorithm = MessageDigest.getInstance("SHA1");
         try (FileInputStream fis = new FileInputStream(file);
                 BufferedInputStream bis = new BufferedInputStream(fis);
@@ -83,5 +101,25 @@ public class App {
             while (dis.read() != -1) ;
         }
         return DatatypeConverter.printHexBinary(algorithm.digest());
+    }
+
+    private static void cleanLocalFileList(String basePath) throws SQLException {
+        logger.info("cleanLocalFileList");
+        final Path base = Paths.get(basePath).toAbsolutePath().normalize();
+        EntityManager em = factory.createEntityManager();
+        em.getTransaction().begin();
+        Connection connection = em.unwrap(java.sql.Connection.class);
+        try (Statement stmt = connection.createStatement(ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_UPDATABLE);
+                ResultSet rs = stmt.executeQuery("SELECT name FROM FileDescriptor")) {
+            while (rs.next()) {
+                String name = rs.getString(1);
+                if (!base.resolve(name).toFile().exists()) {
+                    logger.log(Level.INFO, "DELETE: {0}", name);
+                    rs.deleteRow();
+                }
+            }
+        }
+        em.getTransaction().commit();
+        em.close();
     }
 }

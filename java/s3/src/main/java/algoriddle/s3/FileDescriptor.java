@@ -13,32 +13,15 @@ import javax.persistence.*;
  * @author gszilvasy
  */
 @Entity
+@Table(indexes={
+    @Index(columnList = "sha1"),
+    @Index(columnList = "name", unique = true)
+})
 public class FileDescriptor {
   @Id
   @GeneratedValue(strategy = GenerationType.IDENTITY)
-  private Long id;
-  private String summary;
-  private String description;
-
-  public String getSummary() {
-    return summary;
-  }
-
-  public void setSummary(String summary) {
-    this.summary = summary;
-  }
-
-  public String getDescription() {
-    return description;
-  }
-
-  public void setDescription(String description) {
-    this.description = description;
-  }
-
-  @Override
-  public String toString() {
-    return "Todo [summary=" + summary + ", description=" + description
-        + "]";
-  }
+  private long id;  
+  String name;
+  String sha1;
+  long modified; 
 } 
