@@ -15,7 +15,8 @@ import javax.persistence.*;
 @Entity
 @Table(indexes={
     @Index(columnList = "sha1"),
-    @Index(columnList = "name", unique = true)
+    @Index(columnList = "name", unique = true),
+    @Index(columnList = "uploaded")    
 })
 public class FileDescriptor {
   @Id
@@ -23,5 +24,6 @@ public class FileDescriptor {
   private long id;  
   String name;
   String sha1;
-  long modified; 
+  long modified;
+  int uploaded;
 } 

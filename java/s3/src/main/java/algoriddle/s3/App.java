@@ -2,11 +2,21 @@ package algoriddle.s3;
 
 import com.amazonaws.AmazonClientException;
 import com.amazonaws.AmazonServiceException;
+import com.amazonaws.auth.AWSCredentials;
+import com.amazonaws.auth.BasicAWSCredentials;
+import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3Client;
+import com.amazonaws.services.s3.AmazonS3EncryptionClient;
+import com.amazonaws.services.s3.model.EncryptionMaterials;
+import com.amazonaws.services.s3.model.ListObjectsRequest;
+import com.amazonaws.services.s3.model.ObjectListing;
+import com.amazonaws.services.s3.model.S3ObjectSummary;
 import com.amazonaws.services.s3.transfer.Download;
 import com.amazonaws.services.s3.transfer.TransferManager;
+import com.amazonaws.services.s3.transfer.Upload;
 import java.io.BufferedInputStream;
 import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -39,6 +49,7 @@ import java.sql.Statement;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Properties;
 import java.util.Set;
 import java.util.logging.Level;
@@ -55,20 +66,18 @@ import javax.persistence.Persistence;
 import javax.persistence.Query;
 import javax.xml.bind.DatatypeConverter;
 
-public class App 
-{
+public class App {
 
     private static final EntityManagerFactory factory
             = Persistence.createEntityManagerFactory("algoriddle_s3");
     private static final Logger logger = Logger.getLogger(App.class.getName());
-    private static final String questionsFileName = "questions.txt";
-    
+
     public static void main(String[] args)
-            throws IOException, URISyntaxException, SQLException, 
-                InterruptedException, GeneralSecurityException 
-    {
-        if (args.length == 0)
+            throws IOException, URISyntaxException, SQLException,
+            InterruptedException, GeneralSecurityException {
+        if (args.length == 0) {
             return;
+        }
 
         File pf = new File("s3.properties");
         Properties props = new Properties();
@@ -76,37 +85,46 @@ public class App
             props.load(is);
         }
         props.list(System.out);
-        
+
         String access = "", secret = "", bucket = "",
                 base = props.getProperty("base"),
                 scope = props.getProperty("scope"),
                 pattern = props.getProperty("pattern"),
                 password = props.getProperty("password");
-        
+
         boolean newPassword = false;
         if (password == null) {
             password = generatePassword();
             newPassword = true;
         }
-        
+
         access = decodeProperty(props, "access", password);
         secret = decodeProperty(props, "secret", password);
         bucket = decodeProperty(props, "bucket", password);
-        
+
         if (newPassword) {
             props.setProperty("password", password);
             try (OutputStream os = new FileOutputStream(pf)) {
                 props.store(os, null);
-            }        
+            }
         }
 
         switch (args[0]) {
-            case "scan":
-                if (base == null || scope == null || pattern == null)
+            case "scanclient":
+                if (base == null || scope == null || pattern == null) {
                     return;
+                }
                 cleanLocalFileList(base, pattern);
                 generateLocalFileList(base, scope, pattern);
                 break;
+            case "scanserver":
+                getServerListing(access, secret, password, bucket);
+                break;
+            case "upload":
+                upload(base, access, secret, password, bucket);
+                break;
+            case "download":
+                download(base, access, secret, password, bucket, args[1]);
             case "encode":
                 String cipherText = encode(createSecretKey(password, ""), "");
                 props.setProperty("", cipherText);
@@ -115,23 +133,38 @@ public class App
                 }
                 break;
         }
-//        ;
-        /*        AmazonS3 s3 = new AmazonS3Client();
-         ListObjectsRequest listObjectsRequest = new ListObjectsRequest().withBucketName(args[0]);
-         ObjectListing objectListing;
-         do {
-         objectListing = s3.listObjects(listObjectsRequest);
-         for (S3ObjectSummary sha1 : objectListing.getObjectSummaries()) {
-         System.out.printf("%-30s %10d %s\n", sha1.getKey(), sha1.getSize(), sha1.getStorageClass());
-         }
-         listObjectsRequest.setMarker(objectListing.getNextMarker());
-         } while (objectListing.isTruncated());*/
         System.exit(0);
     }
 
+    private static void cleanLocalFileList(String basePath, String pattern)
+            throws SQLException {
+        logger.info("cleanLocalFileList");
+        final Path base = Paths.get(basePath).toAbsolutePath().normalize();
+        final PathMatcher matcher = FileSystems.getDefault()
+                .getPathMatcher("glob:" + pattern);
+        EntityManager em = factory.createEntityManager();
+        em.getTransaction().begin();
+        Connection connection = em.unwrap(java.sql.Connection.class);
+        try (Statement stmt = connection.createStatement(
+                ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_UPDATABLE);
+                ResultSet rs
+                = stmt.executeQuery("SELECT name FROM FileDescriptor")) {
+            while (rs.next()) {
+                String name = rs.getString(1);
+                Path path = base.resolve(name);
+                if (!matcher.matches(path.getFileName())
+                        || !path.toFile().exists()) {
+                    logger.log(Level.INFO, "DELETE: {0}", name);
+                    rs.deleteRow();
+                }
+            }
+        }
+        em.getTransaction().commit();
+        em.close();
+    }
+
     private static void generateLocalFileList(String basePath,
-            String scopePath, String pattern) throws IOException 
-    {
+            String scopePath, String pattern) throws IOException {
         logger.info("generateLocalFileList");
         final Path base = Paths.get(basePath).toAbsolutePath().normalize();
         final Path scope = Paths.get(scopePath).toAbsolutePath().normalize();
@@ -150,7 +183,7 @@ public class App
                     }
 
                     File file = path.toFile();
-                    String name = base.relativize(path).toString();
+                    String name = base.relativize(path).toString().replace("\\", "/");
                     long modified = file.lastModified();
 
                     em.getTransaction().begin();
@@ -184,78 +217,110 @@ public class App
     }
 
     private static String calculateHash(File file)
-            throws NoSuchAlgorithmException, IOException 
-    {
+            throws NoSuchAlgorithmException, IOException {
         MessageDigest algorithm = MessageDigest.getInstance("SHA1");
-        try (DigestInputStream dis = 
-                new DigestInputStream(
-                new BufferedInputStream(
-                new FileInputStream(file)), algorithm)) 
-        {
-            while (dis.read() != -1) ;
-        }
-        return DatatypeConverter.printHexBinary(algorithm.digest());
+        try (DigestInputStream dis
+                = new DigestInputStream(
+                        new BufferedInputStream(
+                                new FileInputStream(file)), algorithm)) {
+                            while (dis.read() != -1) ;
+                        }
+                        return DatatypeConverter.printHexBinary(algorithm.digest());
     }
 
-    private static void cleanLocalFileList(String basePath, String pattern)
-            throws SQLException 
-    {
-        logger.info("cleanLocalFileList");
-        final Path base = Paths.get(basePath).toAbsolutePath().normalize();
-        final PathMatcher matcher = FileSystems.getDefault()
-                .getPathMatcher("glob:" + pattern);
+    private static void compareClientToServer() throws IOException {
+        try (BufferedReader reader = Files.newBufferedReader(Paths.get("s3.lst"), Charset.forName("UTF-8"))) {
+            String line = null;
+            while ((line = reader.readLine()) != null) {
+                System.out.println(line);
+            }
+        }
+    }
+
+    private static void upload(
+            String basePath, String accessKey, String secretKey,
+            String password, String bucket)
+            throws SQLException, GeneralSecurityException,
+            AmazonClientException, AmazonServiceException,
+            InterruptedException {
+        AWSCredentials credentials
+                = new BasicAWSCredentials(accessKey, secretKey);
+        Path base = Paths.get(basePath).toAbsolutePath().normalize();
         EntityManager em = factory.createEntityManager();
         em.getTransaction().begin();
         Connection connection = em.unwrap(java.sql.Connection.class);
         try (Statement stmt = connection.createStatement(
                 ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_UPDATABLE);
-                ResultSet rs
-                = stmt.executeQuery("SELECT name FROM FileDescriptor")) {
+                ResultSet rs = stmt.executeQuery(
+                        "SELECT name, sha1, uploaded FROM FileDescriptor "
+                        + "WHERE uploaded = 0")) {
             while (rs.next()) {
                 String name = rs.getString(1);
                 Path path = base.resolve(name);
-                if (!matcher.matches(path.getFileName())
-                        || !path.toFile().exists()) {
-                    logger.log(Level.INFO, "DELETE: {0}", name);
-                    rs.deleteRow();
-                }
+                name = name.toLowerCase(Locale.ENGLISH) + "." + rs.getString(2); // add hash
+                logger.log(Level.INFO, "UPLOAD BEGIN: {0}", name);
+                SecretKey aesKey = createSecretKey(password, name);
+                AmazonS3 s3 = new AmazonS3EncryptionClient(credentials,
+                        new EncryptionMaterials(aesKey));
+                s3.putObject(bucket, name, path.toFile());
+                rs.updateInt(3, 1); // uploaded = 1
+                rs.updateRow();
+                logger.log(Level.INFO, "UPLOAD END: {0}", name);
             }
         }
         em.getTransaction().commit();
         em.close();
     }
 
+    private static void download(
+            String basePath, String accessKey, String secretKey,
+            String password, String bucket, String objectKey)
+            throws AmazonClientException, AmazonServiceException,
+            InterruptedException, GeneralSecurityException {
+        AWSCredentials credentials
+                = new BasicAWSCredentials(accessKey, secretKey);
+        SecretKey aesKey = createSecretKey(password, objectKey);
+        AmazonS3 s3 = new AmazonS3EncryptionClient(credentials,
+                new EncryptionMaterials(aesKey));
+        TransferManager tm = new TransferManager(s3);
+        String fileName = objectKey.substring(0, objectKey.lastIndexOf('.'));
+        File file
+                = Paths.get(basePath).toAbsolutePath().normalize()
+                .resolve(fileName).toFile();
+        Download download = tm.download(bucket, objectKey, file);
+        download.waitForCompletion();
+        tm.shutdownNow();
+    }
+
     private static SecretKey createSecretKey(
             String password, String salt)
-            throws NoSuchAlgorithmException, InvalidKeySpecException 
-    {    
+            throws GeneralSecurityException {
         byte[] sb = salt.getBytes(StandardCharsets.UTF_8);
         PBEKeySpec keySpec
                 = new PBEKeySpec(password.toCharArray(), sb, 65536, 256);
-        SecretKeyFactory skf = 
-                SecretKeyFactory.getInstance("PBKDF2WithHmacSHA1");
+        SecretKeyFactory skf
+                = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA1");
         SecretKey sk = skf.generateSecret(keySpec);
         return new SecretKeySpec(sk.getEncoded(), "AES");
     }
 
-    private static String encode(SecretKey key, String plaintext) 
-            throws GeneralSecurityException, UnsupportedEncodingException 
-    {
+    private static String encode(SecretKey key, String plaintext)
+            throws GeneralSecurityException, UnsupportedEncodingException {
         Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
         cipher.init(Cipher.ENCRYPT_MODE, key);
         AlgorithmParameters params = cipher.getParameters();
         byte[] iv = params.getParameterSpec(IvParameterSpec.class).getIV();
-        if (iv.length != 16)
+        if (iv.length != 16) {
             throw new SecurityException();
+        }
         byte[] ciphertext = cipher.doFinal(plaintext.getBytes("UTF-8"));
         byte[] combined = Arrays.copyOf(iv, 16 + ciphertext.length);
         System.arraycopy(ciphertext, 0, combined, 16, ciphertext.length);
         return DatatypeConverter.printBase64Binary(combined);
     }
-    
-    private static String decode(SecretKey key, String ciphertext) 
-            throws GeneralSecurityException, UnsupportedEncodingException
-    {
+
+    private static String decode(SecretKey key, String ciphertext)
+            throws GeneralSecurityException, UnsupportedEncodingException {
         byte[] combined = DatatypeConverter.parseBase64Binary(ciphertext);
         byte[] iv = Arrays.copyOf(combined, 16);
         int cl = combined.length - 16;
@@ -265,25 +330,13 @@ public class App
         cipher.init(Cipher.DECRYPT_MODE, key, new IvParameterSpec(iv));
         return new String(cipher.doFinal(ct), "UTF-8");
     }
-    
-    private static void downloadPublic(
-            String bucketName, String objectKey, File file) 
-            throws AmazonClientException, AmazonServiceException, 
-                    InterruptedException 
-    {
-        AmazonS3Client client = new AmazonS3Client();
-        TransferManager tm = new TransferManager(client);
-        Download download = tm.download(bucketName, objectKey, file);
-        download.waitForCompletion();
-        tm.shutdownNow();
-    }
 
     private static String generatePassword() throws IOException {
         List<String> questions
-                = Files.readAllLines(Paths.get(questionsFileName), 
+                = Files.readAllLines(Paths.get("questions.txt"),
                         Charset.forName("UTF-8"));
         String password = "";
-        BufferedReader input 
+        BufferedReader input
                 = new BufferedReader(new InputStreamReader(System.in));
         for (String question : questions) {
             System.out.println(question);
@@ -294,9 +347,33 @@ public class App
 
     private static String decodeProperty(
             Properties props, String propertyName, String password)
-            throws GeneralSecurityException, UnsupportedEncodingException
-    {
-        return decode(createSecretKey(password, propertyName), 
+            throws GeneralSecurityException, UnsupportedEncodingException {
+        return decode(createSecretKey(password, propertyName),
                 props.getProperty(propertyName));
+    }
+
+    private static void getServerListing(
+            String accessKey, String secretKey, String password, String bucket)
+            throws GeneralSecurityException, IOException {
+        AWSCredentials credentials
+                = new BasicAWSCredentials(accessKey, secretKey);
+        SecretKey aesKey = createSecretKey(password, bucket);
+        AmazonS3 s3 = new AmazonS3EncryptionClient(credentials,
+                new EncryptionMaterials(aesKey));
+        ListObjectsRequest listObjectsRequest
+                = new ListObjectsRequest().withBucketName(bucket);
+        try (BufferedWriter writer
+                = Files.newBufferedWriter(Paths.get("s3.lst"),
+                        Charset.forName("UTF-8"))) {
+            ObjectListing listing;
+            do {
+                listing = s3.listObjects(listObjectsRequest);
+                for (S3ObjectSummary s3os : listing.getObjectSummaries()) {
+                    writer.write(s3os.getKey() + "," + s3os.getSize()
+                            + "," + s3os.getStorageClass() + "\n");
+                }
+                listObjectsRequest.setMarker(listing.getNextMarker());
+            } while (listing.isTruncated());
+        }
     }
 }
