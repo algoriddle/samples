@@ -5,7 +5,6 @@ import com.amazonaws.AmazonServiceException;
 import com.amazonaws.auth.AWSCredentials;
 import com.amazonaws.auth.BasicAWSCredentials;
 import com.amazonaws.services.s3.AmazonS3;
-import com.amazonaws.services.s3.AmazonS3Client;
 import com.amazonaws.services.s3.AmazonS3EncryptionClient;
 import com.amazonaws.services.s3.model.EncryptionMaterials;
 import com.amazonaws.services.s3.model.ListObjectsRequest;
@@ -13,7 +12,6 @@ import com.amazonaws.services.s3.model.ObjectListing;
 import com.amazonaws.services.s3.model.S3ObjectSummary;
 import com.amazonaws.services.s3.transfer.Download;
 import com.amazonaws.services.s3.transfer.TransferManager;
-import com.amazonaws.services.s3.transfer.Upload;
 import java.io.BufferedInputStream;
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
@@ -41,17 +39,14 @@ import java.security.DigestInputStream;
 import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.security.spec.InvalidKeySpecException;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.Arrays;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Properties;
-import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import javax.crypto.Cipher;
@@ -116,6 +111,8 @@ public class App {
                 }
                 cleanLocalFileList(base, pattern);
                 generateLocalFileList(base, scope, pattern);
+                removeDuplicateFiles();
+                compareClientToServer();
                 break;
             case "scanserver":
                 getServerListing(access, secret, password, bucket);
@@ -216,6 +213,35 @@ public class App {
         em.close();
     }
 
+    private static void removeDuplicateFiles() {
+        logger.info("OP: removeDuplicateFiles");
+
+        EntityManager em = factory.createEntityManager();
+        Query dupeQuery = em.createQuery(
+                "SELECT f.sha1, COUNT(f) FROM FileDescriptor f "
+                + "GROUP BY f.sha1 HAVING COUNT(f) > 1");
+        Query hashQuery = em.createQuery(
+                "SELECT f FROM FileDescriptor f WHERE f.sha1 = :sha1");
+        em.getTransaction().begin();
+        List<Object[]> dupes = dupeQuery.getResultList();
+        for (Object[] dupe : dupes) {
+            String hash = (String) dupe[0];
+            logger.log(Level.WARNING, "DUPLICATE: {0}", hash);
+            hashQuery.setParameter("sha1", hash);
+            List<FileDescriptor> files = hashQuery.getResultList();
+            boolean first = true;
+            for (FileDescriptor file : files) {
+                logger.log(Level.WARNING, "FILE: {0}", file.name);
+                if (!first) {
+                    em.remove(file);
+                }
+                first = false;
+            }
+        }
+        em.getTransaction().commit();
+        em.close();
+    }
+
     private static String calculateHash(File file)
             throws NoSuchAlgorithmException, IOException {
         MessageDigest algorithm = MessageDigest.getInstance("SHA1");
@@ -229,12 +255,47 @@ public class App {
     }
 
     private static void compareClientToServer() throws IOException {
+        logger.info("OP: compareClientToServer");
+        EntityManager em = factory.createEntityManager();
+        Query hashQuery = em.createQuery(
+                "SELECT f FROM FileDescriptor f WHERE f.sha1 = :sha1");
+        Query nameQuery = em.createQuery(
+                "SELECT f FROM FileDescriptor f WHERE UPPER(f.name) = :name");
+        em.getTransaction().begin();
         try (BufferedReader reader = Files.newBufferedReader(Paths.get("s3.lst"), Charset.forName("UTF-8"))) {
             String line = null;
             while ((line = reader.readLine()) != null) {
-                System.out.println(line);
+                String[] s3d = line.split(":");
+                if (s3d.length != 3) {
+                    throw new RuntimeException();
+                }
+                int sp = s3d[0].lastIndexOf('.');
+                String name = s3d[0].substring(0, sp);
+                String hash = s3d[0].substring(sp + 1);
+                hashQuery.setParameter("sha1", hash);
+                List<FileDescriptor> files;
+                files = hashQuery.getResultList();
+                if (files.size() > 1) {
+                    throw new RuntimeException();
+                }
+                if (!files.isEmpty()) {
+                    FileDescriptor file = files.get(0);
+                    logger.log(Level.INFO, "EXISTS ON SERVER: {0}", file.name);
+                    if (!file.name.equalsIgnoreCase(name)) {
+                        logger.log(Level.WARNING, "DIFFERENT NAME: {0}", name);
+                    }
+                    file.uploaded = 1;
+                    em.persist(file);
+                } else {
+                    nameQuery.setParameter("name", name.toUpperCase(Locale.ENGLISH));
+                    files = nameQuery.getResultList();
+                    if (!files.isEmpty()) {
+                        logger.log(Level.WARNING, "DIFFERENT HASH: {0}", name);
+                    }
+                }
             }
         }
+        em.getTransaction().commit();
     }
 
     private static void upload(
@@ -243,6 +304,7 @@ public class App {
             throws SQLException, GeneralSecurityException,
             AmazonClientException, AmazonServiceException,
             InterruptedException {
+        logger.info("OP: upload");
         AWSCredentials credentials
                 = new BasicAWSCredentials(accessKey, secretKey);
         Path base = Paths.get(basePath).toAbsolutePath().normalize();
@@ -311,7 +373,7 @@ public class App {
         AlgorithmParameters params = cipher.getParameters();
         byte[] iv = params.getParameterSpec(IvParameterSpec.class).getIV();
         if (iv.length != 16) {
-            throw new SecurityException();
+            throw new RuntimeException();
         }
         byte[] ciphertext = cipher.doFinal(plaintext.getBytes("UTF-8"));
         byte[] combined = Arrays.copyOf(iv, 16 + ciphertext.length);
@@ -355,6 +417,7 @@ public class App {
     private static void getServerListing(
             String accessKey, String secretKey, String password, String bucket)
             throws GeneralSecurityException, IOException {
+        logger.info("OP: getServerListing");
         AWSCredentials credentials
                 = new BasicAWSCredentials(accessKey, secretKey);
         SecretKey aesKey = createSecretKey(password, bucket);
@@ -369,8 +432,8 @@ public class App {
             do {
                 listing = s3.listObjects(listObjectsRequest);
                 for (S3ObjectSummary s3os : listing.getObjectSummaries()) {
-                    writer.write(s3os.getKey() + "," + s3os.getSize()
-                            + "," + s3os.getStorageClass() + "\n");
+                    writer.write(s3os.getKey() + ":" + s3os.getSize()
+                            + ":" + s3os.getStorageClass() + "\n");
                 }
                 listObjectsRequest.setMarker(listing.getNextMarker());
             } while (listing.isTruncated());
