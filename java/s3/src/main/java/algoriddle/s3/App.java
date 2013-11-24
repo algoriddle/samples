@@ -12,43 +12,7 @@ import com.amazonaws.services.s3.model.ObjectListing;
 import com.amazonaws.services.s3.model.S3ObjectSummary;
 import com.amazonaws.services.s3.transfer.Download;
 import com.amazonaws.services.s3.transfer.TransferManager;
-import java.io.BufferedInputStream;
-import java.io.BufferedReader;
-import java.io.BufferedWriter;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
-import java.io.UnsupportedEncodingException;
-import java.net.URISyntaxException;
-import java.nio.charset.Charset;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.FileSystems;
-import java.nio.file.FileVisitResult;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.PathMatcher;
-import java.nio.file.Paths;
-import java.nio.file.SimpleFileVisitor;
-import java.nio.file.attribute.BasicFileAttributes;
-import java.security.AlgorithmParameters;
-import java.security.DigestInputStream;
-import java.security.GeneralSecurityException;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.sql.Connection;
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.sql.Statement;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Locale;
-import java.util.Properties;
-import java.util.logging.Level;
-import java.util.logging.Logger;
+
 import javax.crypto.Cipher;
 import javax.crypto.SecretKey;
 import javax.crypto.SecretKeyFactory;
@@ -60,6 +24,22 @@ import javax.persistence.EntityManagerFactory;
 import javax.persistence.Persistence;
 import javax.persistence.Query;
 import javax.xml.bind.DatatypeConverter;
+import java.io.*;
+import java.net.URISyntaxException;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.*;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.security.*;
+import java.sql.Connection;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Locale;
+import java.util.Properties;
+import java.util.logging.*;
 
 public class App {
 
@@ -81,11 +61,18 @@ public class App {
         }
         props.list(System.out);
 
+        Handler fh = new FileHandler("s3.log");
+        fh.setFormatter(new SimpleFormatter());
+        logger.addHandler(fh);
+
+        logger.info("getProps");
         String access = "", secret = "", bucket = "",
                 base = props.getProperty("base"),
                 scope = props.getProperty("scope"),
                 pattern = props.getProperty("pattern"),
-                password = props.getProperty("password");
+                password = props.getProperty("password"),
+                dupermfolder = props.getProperty("dupermfolder"),
+                dupekeepfolder = props.getProperty("dupekeepfolder");
 
         boolean newPassword = false;
         if (password == null) {
@@ -111,7 +98,7 @@ public class App {
                 }
                 cleanLocalFileList(base, pattern);
                 generateLocalFileList(base, scope, pattern);
-                removeDuplicateFiles();
+                removeDuplicateFiles(dupermfolder, dupekeepfolder);
                 compareClientToServer();
                 break;
             case "scanserver":
@@ -121,7 +108,8 @@ public class App {
                 upload(base, access, secret, password, bucket);
                 break;
             case "download":
-                download(base, access, secret, password, bucket, args[1]);
+                download(args[1], access, secret, password, bucket, args[2]);
+                break;
             case "encode":
                 String cipherText = encode(createSecretKey(password, ""), "");
                 props.setProperty("", cipherText);
@@ -144,13 +132,16 @@ public class App {
         Connection connection = em.unwrap(java.sql.Connection.class);
         try (Statement stmt = connection.createStatement(
                 ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_UPDATABLE);
-                ResultSet rs
-                = stmt.executeQuery("SELECT name FROM FileDescriptor")) {
+             ResultSet rs
+                     = stmt.executeQuery("SELECT name, uploaded FROM FileDescriptor")) {
             while (rs.next()) {
                 String name = rs.getString(1);
                 Path path = base.resolve(name);
-                if (!matcher.matches(path.getFileName())
-                        || !path.toFile().exists()) {
+                if (matcher.matches(path.getFileName())
+                        && path.toFile().exists()) {
+                    rs.updateInt(2, 0);
+                    rs.updateRow();
+                } else {
                     logger.log(Level.INFO, "DELETE: {0}", name);
                     rs.deleteRow();
                 }
@@ -161,7 +152,7 @@ public class App {
     }
 
     private static void generateLocalFileList(String basePath,
-            String scopePath, String pattern) throws IOException {
+                                              String scopePath, String pattern) throws IOException {
         logger.info("generateLocalFileList");
         final Path base = Paths.get(basePath).toAbsolutePath().normalize();
         final Path scope = Paths.get(scopePath).toAbsolutePath().normalize();
@@ -173,7 +164,7 @@ public class App {
         Files.walkFileTree(scope, new SimpleFileVisitor<Path>() {
             @Override
             public FileVisitResult visitFile(Path path,
-                    BasicFileAttributes attrs) throws IOException {
+                                             BasicFileAttributes attrs) throws IOException {
                 try {
                     if (!matcher.matches(path.getFileName())) {
                         return FileVisitResult.CONTINUE;
@@ -213,29 +204,40 @@ public class App {
         em.close();
     }
 
-    private static void removeDuplicateFiles() {
+    private static void removeDuplicateFiles(String dupeRmFolder, String dupeKeepFolder) throws IOException {
         logger.info("OP: removeDuplicateFiles");
 
         EntityManager em = factory.createEntityManager();
         Query dupeQuery = em.createQuery(
                 "SELECT f.sha1, COUNT(f) FROM FileDescriptor f "
-                + "GROUP BY f.sha1 HAVING COUNT(f) > 1");
+                        + "GROUP BY f.sha1 HAVING COUNT(f) > 1");
         Query hashQuery = em.createQuery(
                 "SELECT f FROM FileDescriptor f WHERE f.sha1 = :sha1");
         em.getTransaction().begin();
         List<Object[]> dupes = dupeQuery.getResultList();
-        for (Object[] dupe : dupes) {
-            String hash = (String) dupe[0];
-            logger.log(Level.WARNING, "DUPLICATE: {0}", hash);
-            hashQuery.setParameter("sha1", hash);
-            List<FileDescriptor> files = hashQuery.getResultList();
-            boolean first = true;
-            for (FileDescriptor file : files) {
-                logger.log(Level.WARNING, "FILE: {0}", file.name);
-                if (!first) {
-                    em.remove(file);
+        try (BufferedWriter df = Files.newBufferedWriter(Paths.get("dupes.sh"), Charset.forName("UTF-8"))) {
+            for (Object[] dupe : dupes) {
+                String hash = (String) dupe[0];
+                logger.log(Level.WARNING, "DUPLICATE: {0}", hash);
+                hashQuery.setParameter("sha1", hash);
+                List<FileDescriptor> files = hashQuery.getResultList();
+                boolean first = true;
+                int dc = 1;
+                for (FileDescriptor file : files) {
+                    logger.log(Level.WARNING, "FILE: {0}", file.name);
+                    if (!first) {
+                        em.remove(file);
+                    }
+                    first = false;
+                    if ((dupeRmFolder != null 
+                                && file.name.startsWith(dupeRmFolder)) 
+                            || (dupeKeepFolder != null 
+                                && !file.name.startsWith(dupeKeepFolder)) 
+                            && dc < files.size()) {
+                        df.write("rm \"" + file.name + "\"\n");
+                        dc++;
+                    }
                 }
-                first = false;
             }
         }
         em.getTransaction().commit();
@@ -247,14 +249,14 @@ public class App {
         MessageDigest algorithm = MessageDigest.getInstance("SHA1");
         try (DigestInputStream dis
                 = new DigestInputStream(
-                        new BufferedInputStream(
-                                new FileInputStream(file)), algorithm)) {
-                            while (dis.read() != -1) ;
-                        }
-                        return DatatypeConverter.printHexBinary(algorithm.digest());
+                new BufferedInputStream(
+                new FileInputStream(file)), algorithm)) {
+            while (dis.read() != -1) ;
+        }
+        return DatatypeConverter.printHexBinary(algorithm.digest());
     }
 
-    private static void compareClientToServer() throws IOException {
+    private static void compareClientToServer() throws IOException, SQLException {
         logger.info("OP: compareClientToServer");
         EntityManager em = factory.createEntityManager();
         Query hashQuery = em.createQuery(
@@ -280,8 +282,8 @@ public class App {
                 }
                 if (!files.isEmpty()) {
                     FileDescriptor file = files.get(0);
-                    logger.log(Level.INFO, "EXISTS ON SERVER: {0}", file.name);
                     if (!file.name.equalsIgnoreCase(name)) {
+                        logger.log(Level.INFO, "EXISTS ON SERVER: {0}", file.name);
                         logger.log(Level.WARNING, "DIFFERENT NAME: {0}", name);
                     }
                     file.uploaded = 1;
@@ -290,12 +292,28 @@ public class App {
                     nameQuery.setParameter("name", name.toUpperCase(Locale.ENGLISH));
                     files = nameQuery.getResultList();
                     if (!files.isEmpty()) {
+                        FileDescriptor file = files.get(0);
+                        logger.log(Level.INFO, "EXISTS ON SERVER: {0}", file.name);
                         logger.log(Level.WARNING, "DIFFERENT HASH: {0}", name);
                     }
                 }
             }
         }
         em.getTransaction().commit();
+
+        em.getTransaction().begin();
+        Connection connection = em.unwrap(java.sql.Connection.class);
+        try (Statement stmt = connection.createStatement(
+                ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
+             ResultSet rs = stmt.executeQuery(
+                     "SELECT name FROM FileDescriptor WHERE uploaded = 0")) {
+            while (rs.next()) {
+                String name = rs.getString(1);
+                logger.log(Level.INFO, "UPLOAD: {0}", name);
+            }
+        }
+        em.getTransaction().commit();
+        em.close();
     }
 
     private static void upload(
@@ -313,9 +331,9 @@ public class App {
         Connection connection = em.unwrap(java.sql.Connection.class);
         try (Statement stmt = connection.createStatement(
                 ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_UPDATABLE);
-                ResultSet rs = stmt.executeQuery(
-                        "SELECT name, sha1, uploaded FROM FileDescriptor "
-                        + "WHERE uploaded = 0")) {
+             ResultSet rs = stmt.executeQuery(
+                     "SELECT name, sha1, uploaded FROM FileDescriptor "
+                             + "WHERE uploaded = 0")) {
             while (rs.next()) {
                 String name = rs.getString(1);
                 Path path = base.resolve(name);
@@ -396,7 +414,7 @@ public class App {
     private static String generatePassword() throws IOException {
         List<String> questions
                 = Files.readAllLines(Paths.get("questions.txt"),
-                        Charset.forName("UTF-8"));
+                Charset.forName("UTF-8"));
         String password = "";
         BufferedReader input
                 = new BufferedReader(new InputStreamReader(System.in));
@@ -426,8 +444,8 @@ public class App {
         ListObjectsRequest listObjectsRequest
                 = new ListObjectsRequest().withBucketName(bucket);
         try (BufferedWriter writer
-                = Files.newBufferedWriter(Paths.get("s3.lst"),
-                        Charset.forName("UTF-8"))) {
+                     = Files.newBufferedWriter(Paths.get("s3.lst"),
+                Charset.forName("UTF-8"))) {
             ObjectListing listing;
             do {
                 listing = s3.listObjects(listObjectsRequest);
