@@ -12,6 +12,7 @@ import com.amazonaws.services.s3.model.ObjectListing;
 import com.amazonaws.services.s3.model.S3ObjectSummary;
 import com.amazonaws.services.s3.transfer.Download;
 import com.amazonaws.services.s3.transfer.TransferManager;
+import com.amazonaws.services.s3.transfer.Upload;
 
 import javax.crypto.Cipher;
 import javax.crypto.SecretKey;
@@ -40,6 +41,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Properties;
 import java.util.logging.*;
+import java.util.regex.Pattern;
 
 public class App {
 
@@ -221,14 +223,14 @@ public class App {
                 logger.log(Level.WARNING, "DUPLICATE: {0}", hash);
                 hashQuery.setParameter("sha1", hash);
                 List<FileDescriptor> files = hashQuery.getResultList();
-                boolean first = true;
+//                boolean first = true;
                 int dc = 1;
                 for (FileDescriptor file : files) {
                     logger.log(Level.WARNING, "FILE: {0}", file.name);
-                    if (!first) {
-                        em.remove(file);
-                    }
-                    first = false;
+//                    if (!first) {
+//                        em.remove(file);
+//                    }
+//                    first = false;
                     if ((dupeRmFolder != null 
                                 && file.name.startsWith(dupeRmFolder)) 
                             || (dupeKeepFolder != null 
@@ -267,7 +269,7 @@ public class App {
         try (BufferedReader reader = Files.newBufferedReader(Paths.get("s3.lst"), Charset.forName("UTF-8"))) {
             String line = null;
             while ((line = reader.readLine()) != null) {
-                String[] s3d = line.split(":");
+                String[] s3d = line.split(Pattern.quote("|"));
                 if (s3d.length != 3) {
                     throw new RuntimeException();
                 }
@@ -342,7 +344,10 @@ public class App {
                 SecretKey aesKey = createSecretKey(password, name);
                 AmazonS3 s3 = new AmazonS3EncryptionClient(credentials,
                         new EncryptionMaterials(aesKey));
-                s3.putObject(bucket, name, path.toFile());
+                TransferManager tm = new TransferManager(s3);
+                Upload upload = tm.upload(bucket, name, path.toFile());
+                upload.waitForCompletion();
+//                s3.putObject(bucket, name, path.toFile());
                 rs.updateInt(3, 1); // uploaded = 1
                 rs.updateRow();
                 logger.log(Level.INFO, "UPLOAD END: {0}", name);
@@ -450,8 +455,8 @@ public class App {
             do {
                 listing = s3.listObjects(listObjectsRequest);
                 for (S3ObjectSummary s3os : listing.getObjectSummaries()) {
-                    writer.write(s3os.getKey() + ":" + s3os.getSize()
-                            + ":" + s3os.getStorageClass() + "\n");
+                    writer.write(s3os.getKey() + "|" + s3os.getSize()
+                            + "|" + s3os.getStorageClass() + "\n");
                 }
                 listObjectsRequest.setMarker(listing.getNextMarker());
             } while (listing.isTruncated());
