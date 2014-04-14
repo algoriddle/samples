@@ -47,7 +47,7 @@ class Stack
     if (!head_)
       throw std::out_of_range("Stack::Pop");
 
-    auto tmp = std::move(head_); // unique_ptr should automatically delete previous head_
+    auto tmp = std::move(head_); // unique_ptr deletes previous head_
     head_ = std::move(tmp->next_);
     //		return tmp->value;
     return std::move(tmp->value_);
@@ -73,37 +73,33 @@ class Stack
     head_ = std::move(last);
   }
 
-  T& operator[](unsigned int n)
+  T& operator[](int n)
   {
-    Item *item = head_.get();
-    while (item) {
-      if (n == 0)
-        return item->value_;
-      --n;
-      item = item->next_.get();
+    if (n >= 0) {
+      Item *item = head_.get();
+      while (item) {
+        if (n == 0)
+          return item->value_;
+        --n;
+        item = item->next_.get();
+      }
+      throw std::out_of_range("Stack::operator[+]");
+    } else { // n < 0
+      Item *item = head_.get(), *lookahead = item;
+      while (lookahead) {
+        if (n == -1)
+          break;
+        ++n;
+        lookahead = lookahead->next_.get();
+      }
+      if (!lookahead)
+        throw std::out_of_range("Stack::operator[-]");
+      while (lookahead->next_) { // does lookahead point to last?
+        item = item->next_.get();
+        lookahead = lookahead->next_.get();
+      }
+      return item->value_;
     }
-    throw std::out_of_range("Stack::operator[]");
-  }
-
-  T& NthToLast(int n)
-  {
-    Item *p1, *p2;
-    p1 = p2 = head_.get();
-    while (p2) {
-      if (n == 0)
-        break;
-      n--;
-      p2 = p2->next_.get();
-    }
-
-    if (!p2)
-      throw std::out_of_range("Stack::NthToLast");
-
-    while (p2->next_) {
-      p1 = p1->next_.get();
-      p2 = p2->next_.get();
-    }
-    return p1->value_;
   }
 
   friend std::ostream& operator<<(std::ostream& stream, const Stack& list)
@@ -120,8 +116,10 @@ class Stack
  private:
   struct Item
   {
-    Item(T &value, std::unique_ptr<Item> &next) : value_(std::move(value)), next_(std::move(next)) {}
-    Item(const T &value, std::unique_ptr<Item> &next) : value_(value), next_(std::move(next)) {}
+    Item(T &value, std::unique_ptr<Item> &next) 
+      :value_(std::move(value)), next_(std::move(next)) {}
+    Item(const T &value, std::unique_ptr<Item> &next) 
+      :value_(value), next_(std::move(next)) {}
 
     T value_;
     std::unique_ptr<Item> next_;
@@ -179,26 +177,30 @@ int main()
 #ifdef _WIN32
   _CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);
 #endif
-  Stack<Test> xs{ 5, 10, 20 };
-  xs.Push(12);
-  assert(xs.Peek() == 12);
-  xs.Push(23);
-  assert(xs.Peek() == 23);
-  xs.Push(35);
-  assert(xs.Peek() == 35);
-  Test x = xs.Pop();
-  assert(xs.Peek() == 23);
-  std::cout << xs << "\n";
+  Stack<Test> xs{ 1, 2, 3, 4, 5 };
+  xs.Push(6);
+  assert(xs.Peek() == 6);
+  xs.Push(7);
+  assert(xs.Peek() == 7);
+  assert(xs.Pop() == 7);
+  assert(xs.Peek() == 6);
+  std::cout << xs << "\n"; // 6 5 4 3 2 1
   xs.Reverse();
-  std::cout << xs << "\n" << x << "\n" << xs[0] << " " << xs[3] << " " << xs.NthToLast(0) << " " << xs.NthToLast(3) << "\n";
+  std::cout << xs << "\n"; // 1 2 3 4 5 6
+
+  std::cout << "[0] -> " << xs[0] 
+    << "\n[3] -> " << xs[3] 
+    << "\n[-1] -> " << xs[-1] 
+    << "\n[-4] -> " << xs[-4] << "\n";
+
   Test y = xs.Pop();
-  x = y;
+  Test x = y;
   y = std::move(x);
 
-  Stack<std::unique_ptr<Test>> alma;
-  alma.Push(std::make_unique<Test>(12));
-  assert(*alma.Peek() == 12);
+  Stack<std::unique_ptr<Test>> s;
+  s.Push(std::make_unique<Test>(12));
+  assert(*s.Peek() == 12);
 
-  std::vector<std::unique_ptr<Test>> korte(0);
-  korte.push_back(std::make_unique<Test>(3));
+  std::vector<std::unique_ptr<Test>> v(0);
+  v.push_back(std::make_unique<Test>(3));
 }
