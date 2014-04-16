@@ -141,9 +141,7 @@ string compress(const string& s)
 
 bool is_rotation(const string& s1, const string& s2)
 {
-  if (s1.length() != s2.length())
-    return false;
-  return ((s1 + s1).find(s2) != string::npos);
+  return (s1.length() == s2.length() && (s1 + s1).find(s2) != string::npos);
 }
 
 int main()
