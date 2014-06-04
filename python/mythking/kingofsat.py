@@ -341,14 +341,14 @@ def get_freqs_from_kingofsat_dict(sat_index, polarization, network, transport, s
 
 
 def scrape_kingofsat( ):
-    urls = { 1: "http://en.kingofsat.net/pos-5W-fta.php",
-             2: "http://en.kingofsat.net/pos-7E-fta.php",
-             3: "http://en.kingofsat.net/pos-28.2E-fta.php",
-             5: "http://en.kingofsat.net/pos-19.2E-fta.php",
-             6: "http://en.kingofsat.net/pos-9E-fta.php",
-             7: "http://en.kingofsat.net/pos-30W-fta.php",
-             8: "http://en.kingofsat.net/pos-13E-fta.php",
-             9: "http://en.kingofsat.net/pos-0.8W-fta.php" }
+    urls = { 1: "http://en.kingofsat.net/pos-5W.php",
+             2: "http://en.kingofsat.net/pos-7E.php",
+             3: "http://en.kingofsat.net/pos-28.2E.php",
+             5: "http://en.kingofsat.net/pos-19.2E.php",
+             6: "http://en.kingofsat.net/pos-9E.php",
+             7: "http://en.kingofsat.net/pos-30W.php",
+             8: "http://en.kingofsat.net/pos-13E.php",
+             9: "http://en.kingofsat.net/pos-0.8W.php" }
 
     for sat_index in urls.keys():
         html = read_and_cache_kingofsat(sat_index, urls[sat_index])
@@ -371,7 +371,7 @@ def scrape_kingofsat( ):
                 if len(tid_nid) != 2:
                     raise Exception
                 for tid_or_nid in tid_nid:
-                    contents = tid_or_nid.contents[0]
+                    contents = "".join(tid_or_nid.findAll(text=True))
                     if contents.startswith("TID:"):
                         tid = int(contents[4:])
                     elif contents.startswith("NID:"):
