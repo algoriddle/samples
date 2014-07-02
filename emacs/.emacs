@@ -14,6 +14,10 @@
  ;; If there is more than one, they won't work right.
  )
 
+(require 'package)
+(add-to-list 'package-archives
+  '("melpa" . "http://melpa.milkbox.net/packages/") t)
+
 ;;; uncomment for CJK utf-8 support for non-Asian users
 ;; (require 'un-define)
 
@@ -58,11 +62,40 @@
 (global-set-key (kbd "M-S-<left>") 'previous-buffer)
 (global-set-key (kbd "M-S-<right>") 'next-buffer)
 
+;; haskell ->
 (add-hook 'haskell-mode-hook 'turn-on-haskell-indent)
 (custom-set-variables
   '(haskell-process-suggest-remove-import-lines t)
   '(haskell-process-auto-import-loaded-modules t)
   '(haskell-process-log t))
+;; <- haskell
+
+;; ocaml ->
+;;(add-hook 'tuareg-mode-hook 'tuareg-imenu-set-imenu)
+(add-to-list 'load-path (concat
+  (replace-regexp-in-string "\n$" ""
+    (shell-command-to-string "opam config var share"))
+  "/emacs/site-lisp"))
+(require 'ocp-indent)
+
+(setq auto-mode-alist
+  (append '(("\\.ml[ily]?$" . tuareg-mode)
+            ("\\.topml$" . tuareg-mode))
+          auto-mode-alist)) 
+(autoload 'utop-setup-ocaml-buffer "utop" "Toplevel for OCaml" t)
+(add-hook 'tuareg-mode-hook 'utop-setup-ocaml-buffer)
+(add-hook 'tuareg-mode-hook 'merlin-mode)
+(setq merlin-use-auto-complete-mode t)
+(setq merlin-error-after-save nil)
+;; <- ocaml
+
+;; markdown ->
+(autoload 'markdown-mode "markdown-mode"
+  "Major mode for editing Markdown files" t)
+(add-to-list 'auto-mode-alist '("\\.text\\'" . markdown-mode))
+(add-to-list 'auto-mode-alist '("\\.markdown\\'" . markdown-mode))
+(add-to-list 'auto-mode-alist '("\\.md\\'" . markdown-mode))
+;; <- markdown
 
 (cua-mode t)
 (setq cua-auto-tabify-rectangles nil)
