@@ -11,7 +11,8 @@ Random.init 12345;;
 
 let test = generate 5;;
 
-(* add to 'lists' those sublists of 'list' that begin with head and sum to 'sum' *)
+(* add to 'lists' those sublists of 'list'
+   that begin with head and sum to 'sum' *)
 let sublists list sum lists =
   let (res, _, _) = List.fold list ~init:(lists, [], 0) ~f:(fun (ls, l, s) x ->
       let ns = s + x in
