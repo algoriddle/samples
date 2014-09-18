@@ -1,13 +1,12 @@
 let split l n =
   let rec aux acc n = function
-    | [] -> (acc, [])
+    | [] -> (List.rev acc, [])
     | hd :: tl as l ->
       if n = 0
-      then (acc, l)
+      then (List.rev acc, l)
       else aux (hd :: acc) (n - 1) tl
   in
-  let (front, back) = aux [] n l in
-  (List.rev front, back)
+  aux [] n l
 ;;
 
 split ["a";"b";"c";"d";"e";"f";"g";"h";"i";"j"] 3;;
