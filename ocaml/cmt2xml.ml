@@ -190,7 +190,7 @@ and process_value_description
   printx "value_description" (fun () -> 
       process_ident val_id
     );
-  xref_ident_use Sig val_id val_loc
+  (*  xref_ident_use Sig val_id val_loc *)
   
 and process_signature_item_desc = function
     Tsig_value vd ->
@@ -249,7 +249,7 @@ and process_core_type_desc = function
     process_path p;
     process_location li_loc.Location.loc;
     printxc tag;
-    xref_path_use Ref p li_loc.Location.loc
+    (* xref_path_use Ref p li_loc.Location.loc *)
   | Ttyp_object _ -> printxsc "Ttyp_object"
   | Ttyp_class (_, _, _) -> printxsc "Ttyp_class"
   | Ttyp_alias (_, _) -> printxsc "Ttyp_alias"
@@ -279,7 +279,7 @@ and process_pattern_desc = function
     process_ident id;
     process_location sl.Location.loc;
     printxc tag;
-    xref_ident_use Def id sl.Location.loc
+    (* xref_ident_use Def id sl.Location.loc *)
   | Tpat_alias (_, _, _) -> printxsc "Tpat_alias"
   | Tpat_constant _ -> printxsc "Tpat_constant"
   | Tpat_tuple _ -> printxsc "Tpat_tuple"
@@ -395,7 +395,7 @@ and process_expression_desc = function
           process_types_value_description evd
         end with _ -> ());*)
     printxc tag;
-    xref_path_use Ref p li.Location.loc
+    (* xref_path_use Ref p li.Location.loc *)
   | Texp_constant _ -> printxsc "Texp_constant"
   | Texp_let (rec_flag, list, exp) ->
     printx "Texp_let" (fun () ->
@@ -538,7 +538,7 @@ and process_expression e =
   printxo tag;
   process_expression_desc e.exp_desc;
   process_location e.exp_loc;
-  process_env e.exp_env;
+  (*process_env e.exp_env;*)
   (*process_type_expr e.exp_type;*) 
   printxc tag
 
@@ -553,7 +553,7 @@ and process_module_binding
   printx "module_binding" (fun () ->
         process_ident mb_id;
         process_location mb_loc;
-        xref_ident_use Def mb_id mb_loc;
+        (* xref_ident_use Def mb_id mb_loc; *)
         let temp = !base_path in
         base_path := 
           (sprintf "%s/%d" mb_id.Ident.name mb_id.Ident.stamp) :: !base_path;
@@ -611,8 +611,8 @@ and process_module_expr_desc = function
     Tmod_ident (p, li_loc) -> 
     printx "Tmod_ident" (fun () ->
         process_path p;
-        process_location li_loc.Location.loc;
-        xref_path_use Ref p li_loc.Location.loc)
+        process_location li_loc.Location.loc)
+        (* xref_path_use Ref p li_loc.Location.loc) *)
   | Tmod_structure s -> 
     printx "Tmod_structure" (fun () ->
         process_structure s)
@@ -653,8 +653,8 @@ and process_open_description
     printx "open_description" (fun () ->
       process_path open_path;
       process_longident open_txt.Location.txt;
-      process_location open_loc;
-      xref_path_use Ref open_path open_loc)
+      process_location open_loc)
+      (* xref_path_use Ref open_path open_loc *)
 
 and process_type_declaration
     {
@@ -670,8 +670,8 @@ and process_type_declaration
       typ_attributes
     } =
   process_ident typ_id;
-  process_location typ_loc;
-  xref_ident_use Def typ_id typ_loc
+  process_location typ_loc
+(* xref_ident_use Def typ_id typ_loc *)
 
 and process_structure_item_desc = function
   | Tstr_eval (exp, _) -> 
