@@ -1,0 +1,25 @@
+--- mythtv/libs/libmythtv/recorders/dvbchannel.cpp_backup	2014-07-04 11:18:25.000000000 +0100
++++ mythtv/libs/libmythtv/recorders/dvbchannel.cpp	2014-11-14 16:29:59.550721222 +0000
+@@ -609,6 +609,22 @@
+         cmdseq->props[c++].u.data = PILOT_AUTO;
+         cmdseq->props[c].cmd      = DTV_ROLLOFF;
+         cmdseq->props[c++].u.data = tuning.rolloff;
++
++        LOG(VB_CHANNEL, LOG_INFO, QString("SETTING MIS! %1").arg(tuning.frequency));
++        cmdseq->props[c].cmd = DTV_STREAM_ID;
++	if (tuning.frequency % 10 == 0) {
++            cmdseq->props[c++].u.data = 0;
++        } else {
++            int stream_id, pls_code, pls_mode;
++	    stream_id = tuning.frequency % 10;
++            pls_code = 121212;
++            pls_mode = 1;
++            cmdseq->props[c].cmd = DTV_STREAM_ID;
++            cmdseq->props[c++].u.data = 
++		((pls_mode & 0x3) << 26) |
++    	        ((pls_code & 0x3ffff) << 8) |
++    		(stream_id & 0xff);
++    	}
+     }
+     else if (tuning.mod_sys == DTVModulationSystem::kModulationSystem_DVBS)
+     {
